@@ -13,6 +13,7 @@ Features:
  - zone control support (for ducted systems)
  - standby/preheating detection
  - optional 'current temperature' sensor entity
+ - temperature and humidity sensors per zone, for zone controllers with room sensors (e.g. ZoneIQ)
  - Lossnay ERV support (experimental, see below)
 
 Note: this integration will only work for units in Australia and New Zealand.
@@ -35,7 +36,7 @@ Requires Home Assistant 2025.8 or newer. Please completely remove any existing c
 Setup asks for:
  - **Email** and **Password**: your Mitsubishi Electric Wi-Fi Control app login.
  - **Local commands (faster)**: also send commands to the adapter over LAN, see [About 'local commands'](#about-local-commands). Default: on.
- - **Current temperature**: create sensor entities for room temperature (and the [Lossnay sensors](#lossnay-support)). Default: on.
+ - **Current temperature**: create sensor entities for room temperature, for each zone's temperature and humidity where the zone controller has room sensors (e.g. ZoneIQ), and the [Lossnay sensors](#lossnay-support). Default: on.
 
 Local commands and Current temperature can be changed later under **Settings → Devices & services → Mitsubishi Electric Wi-Fi Control → Configure**. Changes apply as soon as they are saved.
 

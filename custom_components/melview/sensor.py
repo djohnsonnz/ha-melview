@@ -5,6 +5,7 @@ import logging
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
@@ -18,6 +19,25 @@ from .entity import MelViewBaseEntity
 _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
+
+# Readings a zone controller with its own room sensors (e.g. ZoneIQ) reports
+# for each zone. Zones without a room sensor report neither.
+ZONE_SENSORS = (
+    SensorEntityDescription(
+        key="temp",
+        name="Temperature",
+        device_class=SensorDeviceClass.TEMPERATURE,
+        native_unit_of_measurement=UnitOfTemperature.CELSIUS,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    SensorEntityDescription(
+        key="humidity",
+        name="Humidity",
+        device_class=SensorDeviceClass.HUMIDITY,
+        native_unit_of_measurement=PERCENTAGE,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+)
 
 
 async def async_setup_entry(
@@ -43,7 +63,22 @@ async def async_setup_entry(
                     MelViewCoreEfficiencySensor(coordinator),
                 ]
             )
+        for zone in coordinator.get_zones():
+            reported = _zone_data(coordinator, zone.id) or {}
+            entities.extend(
+                MelViewZoneSensor(coordinator, zone, description)
+                for description in ZONE_SENSORS
+                if description.key in reported
+            )
     async_add_entities(entities)
+
+
+def _zone_data(coordinator, zone_id) -> dict | None:
+    """Return what the unit last reported for a zone, or None if it is gone."""
+    for zone in (coordinator.data or {}).get("zones", []):
+        if zone.get("zoneid") == zone_id:
+            return zone
+    return None
 
 
 class MelViewCurrentTempSensor(MelViewBaseEntity, SensorEntity):
@@ -143,3 +178,33 @@ class MelViewCoreEfficiencySensor(MelViewBaseEntity, SensorEntity):
         if efficiency is None:
             return None
         return round(efficiency * 100, 1)
+
+
+class MelViewZoneSensor(MelViewBaseEntity, SensorEntity):
+    """Sensor for a reading from the room sensor of one zone."""
+
+    def __init__(self, coordinator, zone, description: SensorEntityDescription):
+        super().__init__(coordinator, coordinator.device)
+        self.entity_description = description
+        self._id = zone.id
+        self._attr_name = f"Zone {zone.name} {description.name}"
+        self._attr_unique_id = (
+            f"{coordinator.device.get_id()}-{zone.id}_{description.key}"
+        )
+
+    @property
+    def available(self) -> bool:
+        """Return False once the unit stops reporting this zone."""
+        return super().available and _zone_data(self.coordinator, self._id) is not None
+
+    @property
+    def native_value(self):
+        key = self.entity_description.key
+        value = (_zone_data(self.coordinator, self._id) or {}).get(key)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            _LOGGER.error("Invalid zone %s %s value: %s", self._id, key, value)
+            return None
