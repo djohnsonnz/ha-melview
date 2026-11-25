@@ -14,7 +14,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import CONF_SENSOR
-from .entity import MelViewBaseEntity
+from .entity import MelViewBaseEntity, zone_data
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,21 +64,13 @@ async def async_setup_entry(
                 ]
             )
         for zone in coordinator.get_zones():
-            reported = _zone_data(coordinator, zone.id) or {}
+            reported = zone_data(coordinator, zone.id) or {}
             entities.extend(
                 MelViewZoneSensor(coordinator, zone, description)
                 for description in ZONE_SENSORS
                 if description.key in reported
             )
     async_add_entities(entities)
-
-
-def _zone_data(coordinator, zone_id) -> dict | None:
-    """Return what the unit last reported for a zone, or None if it is gone."""
-    for zone in (coordinator.data or {}).get("zones", []):
-        if zone.get("zoneid") == zone_id:
-            return zone
-    return None
 
 
 class MelViewCurrentTempSensor(MelViewBaseEntity, SensorEntity):
@@ -195,12 +187,12 @@ class MelViewZoneSensor(MelViewBaseEntity, SensorEntity):
     @property
     def available(self) -> bool:
         """Return False once the unit stops reporting this zone."""
-        return super().available and _zone_data(self.coordinator, self._id) is not None
+        return super().available and zone_data(self.coordinator, self._id) is not None
 
     @property
     def native_value(self):
         key = self.entity_description.key
-        value = (_zone_data(self.coordinator, self._id) or {}).get(key)
+        value = (zone_data(self.coordinator, self._id) or {}).get(key)
         if value is None:
             return None
         try:

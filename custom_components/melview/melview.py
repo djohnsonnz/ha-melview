@@ -469,6 +469,19 @@ class MelViewDevice:
         """Turn off a zone"""
         return await self.async_send_command(f"Z{zoneid}0")
 
+    async def async_set_zone_temperature(self, zoneid, heat=None, cool=None):
+        """Set the heating and/or cooling temperature of a zone with a room sensor"""
+        # Zone 10 is addressed as 0, as the Wi-Fi Control app does
+        zone = 0 if zoneid == 10 else zoneid
+        commands = []
+        if heat is not None:
+            commands.append(f"ZH{zone}{heat:g}")
+        if cool is not None:
+            commands.append(f"ZL{zone}{cool:g}")
+        if not commands:
+            raise MelViewValidationError("No zone temperature given")
+        return await self.async_send_command(",".join(commands))
+
     async def async_power_on(self):
         """Turn on the unit"""
         return await self.async_send_command("PW1")

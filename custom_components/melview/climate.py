@@ -4,6 +4,8 @@ from homeassistant.components import logbook
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
     ATTR_HVAC_MODE,
+    ATTR_TARGET_TEMP_HIGH,
+    ATTR_TARGET_TEMP_LOW,
     ClimateEntityFeature,
     HVACAction,
     HVACMode,
@@ -16,12 +18,20 @@ from homeassistant.const import (
 )
 
 from .coordinator import MelViewCoordinator
-from .entity import MelViewBaseEntity
+from .entity import MelViewBaseEntity, zone_data
 from .melview import MODE
 
 _LOGGER = logging.getLogger(__name__)
 
 PARALLEL_UPDATES = 0
+
+
+def _set_mode(data: dict) -> HVACMode:
+    """Return the mode a unit is set to, which it reports even when off."""
+    mode_index = data.get("setmode")
+    return next(
+        (mode for mode, val in MODE.items() if val == mode_index), HVACMode.AUTO
+    )
 
 
 class MelViewClimate(MelViewBaseEntity, ClimateEntity):
@@ -110,10 +120,7 @@ class MelViewClimate(MelViewBaseEntity, ClimateEntity):
     @property
     def _set_mode(self) -> HVACMode:
         """Get the configured mode, which the unit reports even when off"""
-        mode_index = self.coordinator.data.get("setmode")
-        return next(
-            (mode for mode, val in MODE.items() if val == mode_index), HVACMode.AUTO
-        )
+        return _set_mode(self.coordinator.data)
 
     @property
     def hvac_mode(self):
@@ -200,6 +207,148 @@ class MelViewClimate(MelViewBaseEntity, ClimateEntity):
         await self.coordinator.async_refresh()
 
 
+class MelViewZoneClimate(MelViewBaseEntity, ClimateEntity):
+    """Thermostat for one zone of a zone controller with room sensors (e.g. ZoneIQ).
+
+    A zone follows the mode of its unit. It can only be turned on or off and
+    given its own heating and cooling temperatures.
+    """
+
+    _attr_precision = PRECISION_HALVES
+    _attr_target_temperature_step = 0.5
+    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+
+    def __init__(self, coordinator: MelViewCoordinator, zone):
+        super().__init__(coordinator, coordinator.device)
+        self._id = zone.id
+        self._attr_name = f"Zone {zone.name}"
+        self._attr_unique_id = f"{coordinator.device.get_id()}-{zone.id}_climate"
+
+    @property
+    def _zone(self) -> dict:
+        return zone_data(self.coordinator, self._id) or {}
+
+    def _zone_float(self, key: str) -> float | None:
+        """Return a numeric zone value, or None if missing or invalid."""
+        value = self._zone.get(key)
+        if value is None:
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            _LOGGER.error("Invalid zone %s %s value: %s", self._id, key, value)
+            return None
+
+    @property
+    def _unit_mode(self) -> HVACMode:
+        return _set_mode(self.coordinator.data)
+
+    @property
+    def available(self) -> bool:
+        """Return False once the unit stops reporting this zone."""
+        return super().available and zone_data(self.coordinator, self._id) is not None
+
+    @property
+    def supported_features(self):
+        """Zone temperatures can be set in heat, cool and auto modes only"""
+        features = ClimateEntityFeature.TURN_ON | ClimateEntityFeature.TURN_OFF
+        if self._unit_mode in (HVACMode.HEAT, HVACMode.COOL):
+            features |= ClimateEntityFeature.TARGET_TEMPERATURE
+        elif self._unit_mode == HVACMode.AUTO:
+            features |= ClimateEntityFeature.TARGET_TEMPERATURE_RANGE
+        return features
+
+    @property
+    def hvac_mode(self):
+        """Return the unit mode while the zone is on, otherwise off"""
+        if not self.coordinator.data.get("power") or not self._zone.get("status"):
+            return HVACMode.OFF
+        return self._unit_mode
+
+    @property
+    def hvac_modes(self):
+        """A zone can only be off or in the mode the unit is set to"""
+        return [HVACMode.OFF, self._unit_mode]
+
+    @property
+    def current_temperature(self) -> float | None:
+        return self._zone_float("temp")
+
+    @property
+    def current_humidity(self) -> float | None:
+        return self._zone_float("humidity")
+
+    # Home Assistant only reads the target temperatures the current
+    # supported_features allow: one in heat or cool mode, the range in auto.
+
+    @property
+    def target_temperature(self) -> float | None:
+        return self._zone_float("heat" if self._unit_mode == HVACMode.HEAT else "cool")
+
+    @property
+    def target_temperature_low(self) -> float | None:
+        return self._zone_float("heat")
+
+    @property
+    def target_temperature_high(self) -> float | None:
+        return self._zone_float("cool")
+
+    @property
+    def min_temp(self) -> float:
+        """Return the minimum temperature for the mode the unit is set to."""
+        if self._unit_mode in self._device.temp_ranges:
+            return self._device.temp_ranges[self._unit_mode]["min"]
+        return super().min_temp
+
+    @property
+    def max_temp(self) -> float:
+        """Return the maximum temperature for the mode the unit is set to."""
+        if self._unit_mode in self._device.temp_ranges:
+            return self._device.temp_ranges[self._unit_mode]["max"]
+        return super().max_temp
+
+    @property
+    def extra_state_attributes(self):
+        """Return spill status as attribute."""
+        return {"Spill active": self._zone.get("status") == 2}
+
+    async def async_set_temperature(self, **kwargs) -> None:
+        """Set the zone temperature for the mode the unit is set to"""
+        if (hvac_mode := kwargs.get(ATTR_HVAC_MODE)) is not None:
+            await self.async_set_hvac_mode(hvac_mode)
+        if self._unit_mode == HVACMode.AUTO:
+            heat = kwargs.get(ATTR_TARGET_TEMP_LOW)
+            cool = kwargs.get(ATTR_TARGET_TEMP_HIGH)
+        elif self._unit_mode == HVACMode.HEAT:
+            heat, cool = kwargs.get(ATTR_TEMPERATURE), None
+        else:
+            heat, cool = None, kwargs.get(ATTR_TEMPERATURE)
+        _LOGGER.debug("Set zone %s temperature: heat %s, cool %s", self._id, heat, cool)
+        await self._async_command(
+            self._device.async_set_zone_temperature(self._id, heat=heat, cool=cool)
+        )
+        await self.coordinator.async_refresh()
+
+    async def async_set_hvac_mode(self, hvac_mode) -> None:
+        """Turn the zone on or off; the mode itself belongs to the unit"""
+        if hvac_mode == HVACMode.OFF:
+            await self.async_turn_off()
+        else:
+            await self.async_turn_on()
+
+    async def async_turn_on(self) -> None:
+        """Turn on the zone"""
+        _LOGGER.debug("Zone %s on", self._id)
+        await self._async_command(self._device.async_enable_zone(self._id))
+        await self.coordinator.async_refresh()
+
+    async def async_turn_off(self) -> None:
+        """Turn off the zone"""
+        _LOGGER.debug("Zone %s off", self._id)
+        await self._async_command(self._device.async_disable_zone(self._id))
+        await self.coordinator.async_refresh()
+
+
 async def async_setup_entry(hass, entry, async_add_entities) -> None:
     """Set up MelView device climate based on config_entry."""
     coordinators = entry.runtime_data
@@ -208,4 +357,10 @@ async def async_setup_entry(hass, entry, async_add_entities) -> None:
         for coordinator in coordinators
         if coordinator.device.get_unit_type() != "ERV"
     ]
+    for coordinator in coordinators:
+        for zone in coordinator.get_zones():
+            reported = zone_data(coordinator, zone.id) or {}
+            # Only zones with their own room sensor report temperatures to set
+            if "heat" in reported and "cool" in reported:
+                entities.append(MelViewZoneClimate(coordinator, zone))
     async_add_entities(entities)

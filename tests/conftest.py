@@ -159,10 +159,20 @@ class MelViewApi:
             raise ClientError("No route to host")
         return AiohttpClientMockResponse(method, url, status=self._status("smart"))
 
-    def _apply(self, command: str) -> None:
+    def _apply(self, commands: str) -> None:
         """Update the unit state the way the real unit would."""
+        for command in commands.split(","):
+            self._apply_one(command)
+
+    def _apply_one(self, command: str) -> None:
         code, value = command[:2], command[2:]
-        if code == "PW":
+        if code in ("ZH", "ZL"):
+            zone_id, temp = int(value[0]), value[1:]
+            for zone in self.unit["zones"]:
+                # The unit addresses zone 10 as 0
+                if zone["zoneid"] % 10 == zone_id:
+                    zone["heat" if code == "ZH" else "cool"] = temp
+        elif code == "PW":
             self.unit["power"] = int(value)
         elif code == "MD":
             self.unit["setmode"] = int(value)

@@ -11,6 +11,7 @@ Home Assistant integration for [AU/NZ Mitsubishi Electric Air Conditioners with 
 Features:
  - fast (local) commands
  - zone control support (for ducted systems)
+ - a thermostat per zone, for zone controllers with room sensors (e.g. ZoneIQ), see [Zone temperature control](#zone-temperature-control)
  - standby/preheating detection
  - optional 'current temperature' sensor entity
  - temperature and humidity sensors per zone, for zone controllers with room sensors (e.g. ZoneIQ)
@@ -60,6 +61,17 @@ These Wi-Fi adapters require an internet connection, however, it is possible for
 In practice, this is still much quicker than waiting up to 30 seconds for the adapter to check in with the melview server to receive commands.
 
 For truly local control, these adapters are also compatible with the ECHONETLite protocol, which has a [very well maintained HACS integration](https://github.com/scottyphillips/echonetlite_homeassistant). However, the ECHONETLite protocol does not support zones, nor 0.5 deg temperature steps.
+
+## Zone temperature control
+Zone controllers with a sensor in each room, such as ZoneIQ, hold a heating and a cooling temperature for every zone. Each of these zones gets its own **climate entity**, next to its zone switch, showing the room's temperature and humidity.
+
+A zone follows the mode of its unit, so a zone's climate entity can only:
+ - turn the zone on or off (the same as its switch)
+ - set the zone's temperature for the mode the unit is in: the heating temperature in heat mode, the cooling temperature in cool mode, and both in auto mode. In dry and fan modes there is no temperature to set.
+
+To change the mode, use the unit's own climate entity. With this kind of zone controller the unit itself has no single target temperature, so set temperatures on the zones.
+
+Zones without a room sensor only get a switch.
 
 ## Lossnay support
 Lossnay ERV units with Wi-Fi Control can now be added as a unique device.

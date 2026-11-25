@@ -54,3 +54,11 @@ class MelViewBaseEntity(CoordinatorEntity[MelViewCoordinator]):
             raise HomeAssistantError(
                 f"MelView command failed for {self._device.get_friendly_name()}: {err}"
             ) from err
+
+
+def zone_data(coordinator: MelViewCoordinator, zone_id) -> dict | None:
+    """Return what the unit last reported for a zone, or None if it is gone."""
+    for zone in (coordinator.data or {}).get("zones", []):
+        if zone.get("zoneid") == zone_id:
+            return zone
+    return None
